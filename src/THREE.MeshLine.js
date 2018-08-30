@@ -1,4 +1,16 @@
-THREE.MeshLine = function() {
+;(function() {
+
+"use strict";
+
+var root = this
+
+var has_require = typeof require !== 'undefined'
+
+var THREE = root.THREE || has_require && require('three')
+if( !THREE )
+	throw new Error( 'MeshLine requires three.js' )
+
+function MeshLine() {
 
 	this.positions = [];
 
@@ -10,16 +22,17 @@ THREE.MeshLine = function() {
 	this.uvs = [];
 	this.counters = [];
 	this.geometry = new THREE.BufferGeometry();
-	
+
 	this.widthCallback = null;
 
 }
 
-THREE.MeshLine.prototype.setGeometry = function( g, c ) {
+MeshLine.prototype.setGeometry = function( g, c ) {
 
 	this.widthCallback = c;
 
 	this.positions = [];
+	this.counters = [];
 
 	if( g instanceof THREE.Geometry ) {
 		for( var j = 0; j < g.vertices.length; j++ ) {
@@ -36,13 +49,13 @@ THREE.MeshLine.prototype.setGeometry = function( g, c ) {
 		// read attribute positions ?
 	}
 
-	if( g instanceof Float32Array || g instanceof Array ) {
+	if( g instanceof Float32Array || g instanceof Array ) {
 		for( var j = 0; j < g.length; j += 3 ) {
 			var c = j/g.length;
 			this.positions.push( g[ j ], g[ j + 1 ], g[ j + 2 ] );
 			this.positions.push( g[ j ], g[ j + 1 ], g[ j + 2 ] );
 			this.counters.push(c);
-            this.counters.push(c);
+			this.counters.push(c);
 		}
 	}
 
@@ -50,7 +63,7 @@ THREE.MeshLine.prototype.setGeometry = function( g, c ) {
 
 }
 
-THREE.MeshLine.prototype.compareV3 = function( a, b ) {
+MeshLine.prototype.compareV3 = function( a, b ) {
 
 	var aa = a * 6;
 	var ab = b * 6;
@@ -58,14 +71,14 @@ THREE.MeshLine.prototype.compareV3 = function( a, b ) {
 
 }
 
-THREE.MeshLine.prototype.copyV3 = function( a ) {
+MeshLine.prototype.copyV3 = function( a ) {
 
 	var aa = a * 6;
 	return [ this.positions[ aa ], this.positions[ aa + 1 ], this.positions[ aa + 2 ] ];
 
 }
 
-THREE.MeshLine.prototype.process = function() {
+MeshLine.prototype.process = function() {
 
 	var l = this.positions.length / 6;
 
@@ -109,7 +122,7 @@ THREE.MeshLine.prototype.process = function() {
 		this.previous.push( v[ 0 ], v[ 1 ], v[ 2 ] );
 	}
 
-	for( var j = 1; j < l; j++ ) {	
+	for( var j = 1; j < l; j++ ) {
 		v = this.copyV3( j );
 		this.next.push( v[ 0 ], v[ 1 ], v[ 2 ] );
 		this.next.push( v[ 0 ], v[ 1 ], v[ 2 ] );
@@ -153,7 +166,7 @@ THREE.MeshLine.prototype.process = function() {
 		this.attributes.width.needsUpdate = true;
 		this.attributes.uv.copyArray(new Float32Array(this.uvs));
 		this.attributes.uv.needsUpdate = true;
-		this.attributes.index.copyArray(new Uint16Array(this.index));
+		this.attributes.index.copyArray(new Uint16Array(this.indices_array));
 		this.attributes.index.needsUpdate = true;
     }
 
@@ -169,7 +182,68 @@ THREE.MeshLine.prototype.process = function() {
 
 }
 
-THREE.MeshLineMaterial = function ( parameters ) {
+function memcpy (src, srcOffset, dst, dstOffset, length) {
+	var i
+
+	src = src.subarray || src.slice ? src : src.buffer
+	dst = dst.subarray || dst.slice ? dst : dst.buffer
+
+	src = srcOffset ? src.subarray ?
+	src.subarray(srcOffset, length && srcOffset + length) :
+	src.slice(srcOffset, length && srcOffset + length) : src
+
+	if (dst.set) {
+		dst.set(src, dstOffset)
+	} else {
+		for (i=0; i<src.length; i++) {
+			dst[i + dstOffset] = src[i]
+		}
+	}
+
+	return dst
+}
+
+/**
+ * Fast method to advance the line by one position.  The oldest position is removed.
+ * @param position
+ */
+MeshLine.prototype.advance = function(position) {
+
+	var positions = this.attributes.position.array;
+	var previous = this.attributes.previous.array;
+	var next = this.attributes.next.array;
+	var l = positions.length;
+
+	// PREVIOUS
+	memcpy( positions, 0, previous, 0, l );
+
+	// POSITIONS
+	memcpy( positions, 6, positions, 0, l - 6 );
+
+	positions[l - 6] = position.x;
+	positions[l - 5] = position.y;
+	positions[l - 4] = position.z;
+	positions[l - 3] = position.x;
+	positions[l - 2] = position.y;
+	positions[l - 1] = position.z;
+
+    // NEXT
+	memcpy( positions, 6, next, 0, l - 6 );
+
+	next[l - 6]  = position.x;
+	next[l - 5]  = position.y;
+	next[l - 4]  = position.z;
+	next[l - 3]  = position.x;
+	next[l - 2]  = position.y;
+	next[l - 1]  = position.z;
+
+	this.attributes.position.needsUpdate = true;
+	this.attributes.previous.needsUpdate = true;
+	this.attributes.next.needsUpdate = true;
+
+};
+
+function MeshLineMaterial( parameters ) {
 
 	var vertexShaderSource = [
 'precision highp float;',
@@ -194,7 +268,6 @@ THREE.MeshLineMaterial = function ( parameters ) {
 '',
 'varying vec2 vUV;',
 'varying vec4 vColor;',
-'varying vec3 vPosition;',
 'varying float vCounters;',
 '',
 'vec2 fix( vec4 i, float aspect ) {',
@@ -252,7 +325,6 @@ THREE.MeshLineMaterial = function ( parameters ) {
 '    vec4 offset = vec4( normal * side, 0.0, 1.0 );',
 '    finalPosition.xy += offset.xy;',
 '',
-'	 vPosition = ( modelViewMatrix * vec4( position, 1. ) ).xyz;',
 '    gl_Position = finalPosition;',
 '',
 '}' ];
@@ -262,25 +334,32 @@ THREE.MeshLineMaterial = function ( parameters ) {
 'precision mediump float;',
 '',
 'uniform sampler2D map;',
+'uniform sampler2D alphaMap;',
 'uniform float useMap;',
+'uniform float useAlphaMap;',
 'uniform float useDash;',
-'uniform vec2 dashArray;',
+'uniform float dashArray;',
+'uniform float dashOffset;',
+'uniform float dashRatio;',
 'uniform float visibility;',
+'uniform float alphaTest;',
+'uniform vec2 repeat;',
 '',
 'varying vec2 vUV;',
 'varying vec4 vColor;',
-'varying vec3 vPosition;',
 'varying float vCounters;',
 '',
 'void main() {',
 '',
 '    vec4 c = vColor;',
-'    if( useMap == 1. ) c *= texture2D( map, vUV );',
-'	 if( useDash == 1. ){',
-'	 	 ',
-'	 }',
+'    if( useMap == 1. ) c *= texture2D( map, vUV * repeat );',
+'    if( useAlphaMap == 1. ) c.a *= texture2D( alphaMap, vUV * repeat ).a;',
+'    if( c.a < alphaTest ) discard;',
+'    if( useDash == 1. ){',
+'        c.a *= ceil(mod(vCounters + dashOffset, dashArray) - (dashArray * dashRatio));',
+'    }',
 '    gl_FragColor = c;',
-'	 gl_FragColor.a = step(vCounters,visibility);',   
+'    gl_FragColor.a *= step(vCounters, visibility);',
 '}' ];
 
 	function check( v, d ) {
@@ -290,35 +369,47 @@ THREE.MeshLineMaterial = function ( parameters ) {
 
 	THREE.Material.call( this );
 
-	parameters = parameters || {};
+	parameters = parameters || {};
 
 	this.lineWidth = check( parameters.lineWidth, 1 );
 	this.map = check( parameters.map, null );
 	this.useMap = check( parameters.useMap, 0 );
+	this.alphaMap = check( parameters.alphaMap, null );
+	this.useAlphaMap = check( parameters.useAlphaMap, 0 );
 	this.color = check( parameters.color, new THREE.Color( 0xffffff ) );
 	this.opacity = check( parameters.opacity, 1 );
 	this.resolution = check( parameters.resolution, new THREE.Vector2( 1, 1 ) );
 	this.sizeAttenuation = check( parameters.sizeAttenuation, 1 );
 	this.near = check( parameters.near, 1 );
 	this.far = check( parameters.far, 1 );
-	this.dashArray = check( parameters.dashArray, [] );
-	this.useDash = ( this.dashArray !== [] ) ? 1 : 0;
+	this.dashArray = check( parameters.dashArray, 0 );
+	this.dashOffset = check( parameters.dashOffset, 0 );
+	this.dashRatio = check( parameters.dashRatio, 0.5 );
+	this.useDash = ( this.dashArray !== 0 ) ? 1 : 0;
 	this.visibility = check( parameters.visibility, 1 );
-  
-	var material = new THREE.RawShaderMaterial( { 
+	this.alphaTest = check( parameters.alphaTest, 0 );
+	this.repeat = check( parameters.repeat, new THREE.Vector2( 1, 1 ) );
+
+	var material = new THREE.RawShaderMaterial( {
 		uniforms:{
 			lineWidth: { type: 'f', value: this.lineWidth },
 			map: { type: 't', value: this.map },
 			useMap: { type: 'f', value: this.useMap },
+			alphaMap: { type: 't', value: this.alphaMap },
+			useAlphaMap: { type: 'f', value: this.useAlphaMap },
 			color: { type: 'c', value: this.color },
 			opacity: { type: 'f', value: this.opacity },
 			resolution: { type: 'v2', value: this.resolution },
 			sizeAttenuation: { type: 'f', value: this.sizeAttenuation },
 			near: { type: 'f', value: this.near },
 			far: { type: 'f', value: this.far },
-			dashArray: { type: 'v2', value: new THREE.Vector2( this.dashArray[ 0 ], this.dashArray[ 1 ] ) },
+			dashArray: { type: 'f', value: this.dashArray },
+			dashOffset: { type: 'f', value: this.dashOffset },
+			dashRatio: { type: 'f', value: this.dashRatio },
 			useDash: { type: 'f', value: this.useDash },
-			visibility: {type: 'f', value: this.visibility}
+			visibility: {type: 'f', value: this.visibility},
+			alphaTest: {type: 'f', value: this.alphaTest},
+			repeat: { type: 'v2', value: this.repeat }
 		},
 		vertexShader: vertexShaderSource.join( '\r\n' ),
 		fragmentShader: fragmentShaderSource.join( '\r\n' )
@@ -327,6 +418,8 @@ THREE.MeshLineMaterial = function ( parameters ) {
 	delete parameters.lineWidth;
 	delete parameters.map;
 	delete parameters.useMap;
+	delete parameters.alphaMap;
+	delete parameters.useAlphaMap;
 	delete parameters.color;
 	delete parameters.opacity;
 	delete parameters.resolution;
@@ -334,8 +427,12 @@ THREE.MeshLineMaterial = function ( parameters ) {
 	delete parameters.near;
 	delete parameters.far;
 	delete parameters.dashArray;
-    delete parameters.visibility;
-  
+	delete parameters.dashOffset;
+	delete parameters.dashRatio;
+	delete parameters.visibility;
+	delete parameters.alphaTest;
+	delete parameters.repeat;
+
 	material.type = 'MeshLineMaterial';
 
 	material.setValues( parameters );
@@ -344,23 +441,46 @@ THREE.MeshLineMaterial = function ( parameters ) {
 
 };
 
-THREE.MeshLineMaterial.prototype = Object.create( THREE.Material.prototype );
-THREE.MeshLineMaterial.prototype.constructor = THREE.MeshLineMaterial;
+MeshLineMaterial.prototype = Object.create( THREE.Material.prototype );
+MeshLineMaterial.prototype.constructor = MeshLineMaterial;
 
-THREE.MeshLineMaterial.prototype.copy = function ( source ) {
+MeshLineMaterial.prototype.copy = function ( source ) {
 
 	THREE.Material.prototype.copy.call( this, source );
 
 	this.lineWidth = source.lineWidth;
 	this.map = source.map;
 	this.useMap = source.useMap;
+	this.alphaMap = source.alphaMap;
+	this.useAlphaMap = source.useAlphaMap;
 	this.color.copy( source.color );
 	this.opacity = source.opacity;
 	this.resolution.copy( source.resolution );
 	this.sizeAttenuation = source.sizeAttenuation;
 	this.near = source.near;
 	this.far = source.far;
+	this.dashArray.copy( source.dashArray );
+	this.dashOffset.copy( source.dashOffset );
+	this.dashRatio.copy( source.dashRatio );
+	this.useDash = source.useDash;
+	this.visibility = source.visibility;
+	this.alphaTest = source.alphaTest;
+	this.repeat.copy( source.repeat );
 
 	return this;
 
 };
+
+if( typeof exports !== 'undefined' ) {
+	if( typeof module !== 'undefined' && module.exports ) {
+		exports = module.exports = { MeshLine: MeshLine, MeshLineMaterial: MeshLineMaterial };
+	}
+	exports.MeshLine = MeshLine;
+	exports.MeshLineMaterial = MeshLineMaterial;
+}
+else {
+	root.MeshLine = MeshLine;
+	root.MeshLineMaterial = MeshLineMaterial;
+}
+
+}).call(this);
